@@ -1,0 +1,4 @@
+UberLib.CC128
+==============
+This is a very simple and small wrapper for interfacing with the Current Cost Ltd. CC128 power monitor device;
+this is only designed to provide real-time data such as the watt-usage.
