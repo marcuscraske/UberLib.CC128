@@ -146,7 +146,7 @@ namespace UberLib.CC128
             try
             {
                 EnergyReading re = EnergyReading.parse(data);
-                if (eventNewSensorData != null) eventNewSensorData(re);
+                if (re != null && eventNewSensorData != null) eventNewSensorData(re);
             }
             catch (Exception ex)
             {
