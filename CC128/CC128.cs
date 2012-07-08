@@ -57,7 +57,8 @@ namespace UberLib.CC128
             ErrorOccurredOnStart,
             Running,
             NotRunning,
-            RuntimeError
+            RuntimeError,
+            DeviceDisconnected
         }
         #endregion
 
@@ -65,6 +66,8 @@ namespace UberLib.CC128
         private SerialPort serialPort = null;
         private State state = State.NotRunning;
         private string port;
+        private Thread disconnectThread = null;
+        private DateTime lastCommunicated;
         #endregion
 
         #region "Methods - Constructors"
@@ -92,20 +95,27 @@ namespace UberLib.CC128
 
         #region "Methods - Start/stop/serial-port handlers"
         /// <summary>
-        /// Starts the connection.
+        /// Creates the serial port for communication wit hthe energy monitor.
         /// </summary>
-        public void start()
+        public void initSerialPort()
         {
-            if (serialPort != null) return;
             try
             {
-                // Create serial port
+                // Create the serial port and hook its events
                 serialPort = new SerialPort();
                 serialPort.BaudRate = 57600;
                 serialPort.PortName = port;
                 serialPort.Open();
                 serialPort.ErrorReceived += new SerialErrorReceivedEventHandler(serialPort_ErrorReceived);
                 serialPort.DataReceived += new SerialDataReceivedEventHandler(serialPort_DataReceived);
+                // Launch thread for detecting time-out
+                disconnectThread = new Thread(
+                    delegate()
+                    {
+                        disconnectThreadWorker();
+                    });
+                lastCommunicated = DateTime.Now;
+                disconnectThread.Start();
                 // Update state
                 state = State.Running;
             }
@@ -115,6 +125,53 @@ namespace UberLib.CC128
                 state = State.ErrorOccurredOnStart;
             }
             if (eventStateChange != null) eventStateChange(state);
+        }
+        /// <summary>
+        /// Disposes the serial port for communication with the energy monitor.
+        /// </summary>
+        public void disposeSerialPort(bool deviceDisconnected)
+        {
+            try
+            {
+                serialPort.Close();
+            }
+            catch { }
+            finally
+            {
+                serialPort.Dispose();
+                serialPort = null;
+            }
+            if (deviceDisconnected)
+                // Update the status
+                state = State.DeviceDisconnected;
+            else
+                state = State.NotRunning;
+            if (eventStateChange != null) eventStateChange(state);
+            disconnectThread.Abort();
+            disconnectThread = null;
+        }
+        /// <summary>
+        /// Starts the connection.
+        /// </summary>
+        public void start()
+        {
+            if (serialPort != null) return;
+            // Create serial port
+            initSerialPort();
+        }
+        /// <summary>
+        /// Used to detect if no data has been received for longer than seven seconds; if so, it's likely the energy monitor
+        /// has been disconnected with the host.
+        /// </summary>
+        private void disconnectThreadWorker()
+        {
+            while (true)
+            {
+                if (DateTime.Now.Subtract(lastCommunicated).TotalSeconds > 15)
+                    // Dispose port
+                    disposeSerialPort(true);
+                Thread.Sleep(1000);
+            }
         }
         void serialPort_ErrorReceived(object sender, SerialErrorReceivedEventArgs e)
         {
@@ -127,31 +184,25 @@ namespace UberLib.CC128
         public void stop()
         {
             // Dispose port
-            try
-            {
-                serialPort.Close();
-                serialPort.Dispose();
-            }
-            finally
-            {
-                serialPort = null;
-            }
-            // Update state
-            state = State.NotRunning;
-            if (eventStateChange != null) eventStateChange(state);
+            disposeSerialPort(false);
         }
         void serialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
-            string data = serialPort.ReadLine();
+            lastCommunicated = DateTime.Now;
             try
             {
-                EnergyReading re = EnergyReading.parse(data);
-                if (re != null && eventNewSensorData != null) eventNewSensorData(re);
+                string data = serialPort.ReadLine();
+                try
+                {
+                    EnergyReading re = EnergyReading.parse(data);
+                    if (re != null && eventNewSensorData != null) eventNewSensorData(re);
+                }
+                catch (Exception ex)
+                {
+                    if (eventNewSensorDataMalformed != null) eventNewSensorDataMalformed(data, ex);
+                }
             }
-            catch (Exception ex)
-            {
-                if (eventNewSensorDataMalformed != null) eventNewSensorDataMalformed(data, ex);
-            }
+            catch { }
         }
         #endregion
 
